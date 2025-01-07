@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Weather</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f4f4f4;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+
+        #cities {
+            margin-top: 30px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            background-color: white;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>City Weather</h1>
+    <button onclick="updateWeather()">Update</button>
+    <div id="cities"></div>
+
+    <script>
+        async function updateWeather() {
+            const response = await fetch('/update');
+            const data = await response.json();
+            const citiesDiv = document.getElementById('cities');
+            citiesDiv.innerHTML = '';
+            for (const city in data) {
+                const temperature = data[city]['temperature'];
+                const p = document.createElement('p');
+                p.textContent = `${city}: ${temperature}°C`;
+                citiesDiv.appendChild(p);
+            }
+        }
+    </script>
+    <footer>
+        <p>作者：bzy</p>
+    </footer>
+</body>
+
+</html>
