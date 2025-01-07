@@ -1,112 +1,98 @@
 import csv
-import aiohttp
 import asyncio
-from fastapi import FastAPI, Request, Body
+import aiohttp
+from fastapi import FastAPI, Request, HTTPException, Depends, Body
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from typing import Dict
+
+app = FastAPI()
+templates = Jinja2Templates(directory='templates')
+
+# 用于存储首都信息的全局字典
+capitals_info = {}
 
 
-# 创建FastAPI应用实例
-bzy_app = FastAPI()
-
-# 连接Jinja2模板以处理HTML模板（templates文件夹）
-bzy_templates = Jinja2Templates(directory='templates')
-
-# 全局城市字典，用于存储城市信息和温度
-bzy_cities_dict = {}
-
-
-def bzy_load_cities(csv_file_path: str) -> None:
-    """
-    从CSV文件加载城市列表，并将其存储到全局城市字典中。
-
-    :param csv_file_path: CSV文件的路径，该文件包含城市名称、纬度和经度信息。
-    """
-    global bzy_cities_dict
-    with open(csv_file_path, mode='r', encoding='utf-8') as csvfile:
+def load_capitals_info(filename):
+    global capitals_info
+    capitals_info.clear()
+    with open(filename, mode='r', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            bzy_city_name = row['city']
-            bzy_latitude = row['latitude']
-            bzy_longitude = row['longitude']
-            bzy_cities_dict[bzy_city_name] = {
-                'latitude': bzy_latitude,
-                'longitude': bzy_longitude,
+            capital = row['capital']
+            latitude = float(row['latitude'])
+            longitude = float(row['longitude'])
+            capitals_info[capital] = {
+                'latitude': latitude,
+                'longitude': longitude,
                 'temperature': None
             }
 
 
-# 加载城市列表
-bzy_load_cities('europe.csv')
+load_capitals_info('europe.csv')
 
 
-@bzy_app.get('/', response_class=HTMLResponse)
-async def bzy_root(request: Request) -> HTMLResponse:
-    """
-    处理根路径的GET请求，返回初始页面index.html。
-
-    :param request: FastAPI的请求对象。
-    :return: 包含index.html内容的HTML响应。
-    """
-    return bzy_templates.TemplateResponse('index.html', {'request': request})
-
-
-@bzy_app.get('/update')
-async def bzy_update_weather() -> dict:
-    """
-    处理GET /update请求，获取每个城市的温度并返回城市及其温度的字典。
-
-    此版本在获取温度后，按温度对城市进行排序。
-
-    :return: 包含城市名称和对应温度的字典，按温度升序排列。
-    """
-    async def bzy_fetch_city_temperature(bzy_city: str) -> None:
-        """
-        内部异步函数，用于获取单个城市的温度。
-
-        :param bzy_city: 城市名称。
-        """
-        bzy_latitude = bzy_cities_dict[bzy_city]['latitude']
-        bzy_longitude = bzy_cities_dict[bzy_city]['longitude']
-        bzy_url = f"https://api.open-meteo.com/v1/forecast?latitude={bzy_latitude}&longitude={bzy_longitude}&current_weather=true"
-        async with aiohttp.ClientSession() as bzy_session:
-            async with bzy_session.get(bzy_url) as bzy_response:
-                bzy_data = await bzy_response.json()
-                bzy_temperature = bzy_data['current_weather']['temperature']
-                bzy_cities_dict[bzy_city]['temperature'] = bzy_temperature
-
-    tasks = [bzy_fetch_city_temperature(bzy_city) for bzy_city in bzy_cities_dict]
-    await asyncio.gather(*tasks)
-
-    # 按温度对城市进行排序
-    bzy_cities_sorted = sorted(bzy_cities_dict.items(), key=lambda item: item[1]['temperature'])
-    bzy_cities_dict = dict(bzy_cities_sorted)
-
-    return bzy_cities_dict
+async def fetch_single_capital_weather(lat, lon):
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data['current_weather']['temperature']
+                else:
+                    raise HTTPException(status_code=response.status, detail=f"API request failed with status {response.status}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching weather data: {str(e)}")
 
 
-@bzy_app.post('/add_city')
-async def bzy_add_city(bzy_city_data = Body(...)):
-    global bzy_cities_dict
-    bzy_city = bzy_city_data['city']
-    bzy_latitude = bzy_city_data['latitude']
-    bzy_longitude = bzy_city_data['longitude']
-    bzy_cities_dict[bzy_city] = {'latitude': bzy_latitude, 'longitude': bzy_longitude, 'temperature': None}
-    return JSONResponse(content={"message": f"{bzy_city} added successfully"})
+@app.get('/update')
+async def fetch_weather():
+    global capitals_info
+    tasks = []
+    for capital, info in capitals_info.items():
+        lat = info['latitude']
+        lon = info['longitude']
+        tasks.append(fetch_single_capital_weather(lat, lon))
+
+    temperatures = await asyncio.gather(*tasks)
+    for i, capital in enumerate(capitals_info.keys()):
+        capitals_info[capital]['temperature'] = temperatures[i]
+
+    # 按温度升序排序
+    sorted_capitals = sorted(capitals_info.items(), key=lambda x: x[1]['temperature'])
+    return {capital: info for capital, info in sorted_capitals}
 
 
-@bzy_app.delete('/delete_city/{bzy_city_name}')
-async def bzy_delete_city(bzy_city_name: str):
-    global bzy_cities_dict
-    if bzy_city_name in bzy_cities_dict:
-        del bzy_cities_dict[bzy_city_name]
-        return JSONResponse(content={"message": f"{bzy_city_name} deleted successfully"})
-    else:
-        return JSONResponse(content={"message": f"{bzy_city_name} not found"}, status_code = 404)
+@app.post('/add_capital')
+async def add_capital(capital_data: Dict[str, float] = Body(...)):
+    capital = list(capital_data.keys())[0]
+    latitude = capital_data[capital]['latitude']
+    longitude = capital_data[capital]['longitude']
+    if capital in capitals_info:
+        raise HTTPException(status_code=400, detail=f"Capital {capital} already exists.")
+    capitals_info[capital] = {
+        'latitude': latitude,
+        'longitude': longitude,
+        'temperature': None
+    }
+    return JSONResponse(content={"message": f"Capital {capital} added successfully."})
 
 
-@bzy_app.post('/reset_cities')
-async def bzy_reset_cities():
-    global bzy_cities_dict
-    bzy_load_cities('europe.csv')
-    return JSONResponse(content={"message": "Cities list reset successfully"})
+@app.delete('/delete_capital/{capital_name}')
+async def delete_capital(capital_name: str):
+    if capital_name not in capitals_info:
+        raise HTTPException(status_code=400, detail=f"Capital {capital_name} does not exist.")
+    del capitals_info[capital_name]
+    return JSONResponse(content={"message": f"Capital {capital_name} deleted successfully."})
+
+
+@app.get('/reset')
+async def reset_capitals():
+    load_capitals_info('europe.csv')
+    return JSONResponse(content={"message": "Capital list reset successfully."})
+
+
+@app.get('/', response_class=HTMLResponse)
+async def read_root(request: Request):
+    return templates.TemplateResponse('index.html', {'request': request})
